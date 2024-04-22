@@ -76,7 +76,7 @@ if __name__ == "__main__":
             result = bleu.compute(predictions=predictions, references=references)
             print(f"BLEU Result for {lang} test split: {result}")
             f.write(f"BLEU Result for {lang} test split: {result}\n\n")
-            f2.write(f"{lang}:\n{"\n".join(predictions)}\n\n")
+            f2.write(lang + ":\n" + "\n".join(predictions) + "\n\n")
                 
             print(lang, lang_length)
             
