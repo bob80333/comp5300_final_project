@@ -162,3 +162,7 @@ cython_debug/
 
 # dataset files
 data/
+
+
+# MACOS
+.DS_Store
