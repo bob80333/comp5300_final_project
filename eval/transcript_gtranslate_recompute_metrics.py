@@ -56,7 +56,7 @@ if __name__ == "__main__":
             lang_name = lang.split("_")[0]
 
             sentences = lang_sentences[1:]
-            predictions = [[x] for x in sentences]
+            predictions = [x for x in sentences]
 
             references = []
             dataset = load_dataset(
