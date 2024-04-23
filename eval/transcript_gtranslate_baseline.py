@@ -4,6 +4,7 @@ import torch
 from tqdm import tqdm
 from google.cloud import translate_v2 as translate
 from torch.utils.data import DataLoader
+import numpy as np
 
 if __name__ == "__main__":
 
@@ -48,6 +49,7 @@ if __name__ == "__main__":
 
     # Load evaluation metric
     bleu = load_metric("sacrebleu")
+    bertscore = load_metric("bertscore")
 
     # Process each language dataset
     length = 0
@@ -74,8 +76,10 @@ if __name__ == "__main__":
 
             #Compute BLEU score
             result = bleu.compute(predictions=predictions, references=references)
-            print(f"BLEU Result for {lang} test split: {result}")
-            f.write(f"BLEU Result for {lang} test split: {result}\n\n")
+            bertscore_result = bertscore.compute(predictions=predictions, references=references, model_type="microsoft/deberta-xlarge-mnli")
+            bertscore = np.mean(bertscore_result["f1"])
+            print(f"BLEU Result for {lang} test split: {result}, BERTScore: {bertscore}")
+            f.write(f"BLEU Result for {lang} test split: {result}, BERTScore: {bertscore}\n\n")
             f2.write(lang + ":\n" + "\n".join(predictions) + "\n\n")
                 
             print(lang, lang_length)
