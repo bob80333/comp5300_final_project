@@ -45,40 +45,21 @@ if __name__ == "__main__":
         #"zh-CN_en": "chinese",
     }
 
-
-    # Load evaluation metric
-    bleu = load_metric("sacrebleu")
-
     # Process each language dataset
-    length = 0
-    with open("logs/transcript_gtranslate_baseline.txt", "w") as f, open("logs/gtranslate_sentences.txt", "w") as f2:
+    
+    with open("logs/samples.txt", "w", encoding='utf-8') as f:
 
         for lang in tqdm(covost2_langs.keys()):
             # Get language name
             lang_name = lang.split("_")[0]
             # Load the dataset
             dataset = load_dataset("covost2", lang, data_dir="data/"+lang_name, split="test", download_mode='force_redownload')
-            dataloader = DataLoader(dataset, num_workers=2)
-            # Collect predictions and references
-            predictions, references = [], []
-            lang_length = 0
+            dataloader = DataLoader(dataset, num_workers=1)
+            i = 0
+            print(lang_name)
             for item in tqdm(dataloader):
-                length += len(item["sentence"][0])
-                lang_length += len(item["sentence"][0])
-                    #Translate using Google Translate API
-                translation = client.translate(item["sentence"][0], source_language=lang_name, target_language='en')['translatedText']
-                
-                #Collecting translated text and original references
-                predictions.append(translation)
-                references.append([item["translation"]])
-
-            #Compute BLEU score
-            result = bleu.compute(predictions=predictions, references=references)
-            print(f"BLEU Result for {lang} test split: {result}")
-            f.write(f"BLEU Result for {lang} test split: {result}\n\n")
-            f2.write(lang + ":\n" + "\n".join(predictions) + "\n\n")
-                
-            print(lang, lang_length)
-            
-            
-        print("Total length in characters", length)
+                print(item)
+                f.write(str(item))
+                i += 1
+                if i > 5:
+                    break
