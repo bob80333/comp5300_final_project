@@ -89,13 +89,13 @@ processed_dataset = combined_dataset.map(preprocess, remove_columns=combined_dat
 loader = DataLoader(processed_dataset, batch_size=8, shuffle=True, num_workers=4)
 
 # Training
-optimizer = torch.optim.Adam(combined_model.adapter.parameters(), lr=1e-3)
+optimizer = torch.optim.Adam(combined_model.adapter.parameters(), lr=3e-4)
 combined_model.train()
 
 for epoch in range(3):
     loop = tqdm(loader, leave=True)
     for batch in loop:
-        inputs = batch["input_values"].to(torch.float32)  # Ensure correct type
+        inputs = batch["input_values"]
         labels = batch["labels"]
 
         outputs = combined_model(inputs)
