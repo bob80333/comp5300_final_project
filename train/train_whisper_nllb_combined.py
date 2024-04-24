@@ -5,13 +5,16 @@ from transformers import (
     WhisperForConditionalGeneration,
     AutoTokenizer,
     AutoModelForSeq2SeqLM,
+    WhisperProcessor
 )
 from datasets import load_dataset, interleave_datasets
 from tqdm.auto import tqdm
 
 
 # Load Whisper model
-whisper_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-large")
+whisper_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-large-v2")
+whisper_processor = WhisperProcessor.from_pretrained("openai/whisper-large-v2")
+
 
 # Load Facebook's NLLB-200 decoder
 nllb_model = AutoModelForSeq2SeqLM.from_pretrained("facebook/nllb-200-3.3B")
@@ -77,9 +80,7 @@ combined_dataset = interleave_datasets([latvian_dataset, mongolian_dataset, tami
 def preprocess(example):
     # Assume dataset structure and perform necessary handling like text conversion
     audio = example["audio"]
-    input_values = whisper_model.feature_extractor(
-        audio["array"], sampling_rate=audio["sampling_rate"]
-    ).input_values
+    input_values = whisper_processor(audio, return_tensors="pt").input_values
     
     target_ids = nllb_tokenizer(example["translation"], return_tensors="pt").input_ids
     return {"input_values": input_values, "labels": target_ids}
