@@ -18,6 +18,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "true"
 if __name__ == "__main__":
     whisper_name = "openai/whisper-tiny"
     nllb_name = "facebook/nllb-200-distilled-600M"
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
     # Load Whisper model
@@ -77,16 +79,17 @@ if __name__ == "__main__":
 
     # Instantiate the combined model
     combined_model = WhisperWithNLLBDecoder(whisper_model, nllb_model.model.decoder, nllb_model.lm_head, adapter)
+    combined_model.to(device)
 
 
     # Load datasets
-    #latvian_dataset = load_dataset("covost2", "lv_en", split="train", data_dir="data/lv")
-    #mongolian_dataset = load_dataset("covost2", "mn_en", split="train", data_dir="data/mn")
-    #tamil_dataset = load_dataset("covost2", "ta_en", split="train", data_dir="data/ta")
+    latvian_dataset = load_dataset("covost2", "lv_en", split="train", data_dir="data/lv")
+    mongolian_dataset = load_dataset("covost2", "mn_en", split="train", data_dir="data/mn")
+    tamil_dataset = load_dataset("covost2", "ta_en", split="train", data_dir="data/ta")
 
-    #combined_dataset = interleave_datasets([latvian_dataset, mongolian_dataset, tamil_dataset])
+    combined_dataset = interleave_datasets([latvian_dataset, mongolian_dataset, tamil_dataset]).select(range(1024))
 
-    combined_dataset = load_dataset("covost2", "pt_en", split="test", data_dir="data/pt").select(range(1024))
+    #combined_dataset = load_dataset("covost2", "pt_en", split="test", data_dir="data/pt").select(range(1024))
     print(combined_dataset)
 
 
@@ -96,10 +99,8 @@ if __name__ == "__main__":
         audio = example["audio"]["array"]
         sample_rate = example["audio"]["sampling_rate"]
         input_values = whisper_processor(audio, sampling_rate=sample_rate, return_tensors="pt").input_features[0]
-        #print(input_values.shape)
         
         target_ids = nllb_tokenizer(example["translation"], return_tensors="pt").input_ids[0]
-        #print(target_ids.shape)
         return {"input_values": input_values, "input_ids": target_ids}
 
 
@@ -108,23 +109,27 @@ if __name__ == "__main__":
 
     collator_fn = DataCollatorWithPadding(nllb_tokenizer)
 
-    loader = DataLoader(processed_dataset, batch_size=16, shuffle=True, num_workers=1, collate_fn=collator_fn)
+    loader = DataLoader(processed_dataset, batch_size=16, shuffle=True, num_workers=2, collate_fn=collator_fn)
 
     # Training
-    optimizer = torch.optim.Adam(combined_model.adapter.parameters(), lr=3e-4)
-    combined_model.train()
+    combined_model.adapter.train()
+    combined_model.lm_head.train()
+    
+    params = list(combined_model.adapter.parameters()) + list(combined_model.lm_head.parameters())
+    optimizer = torch.optim.Adam(params, lr=3e-4)
+
 
     for epoch in range(1):
         loop = tqdm(loader, leave=True)
         for batch in loop:
-            audio_input = batch["input_values"]
-            tokens = batch["input_ids"]
+            audio_input = batch["input_values"].to(device)
+            tokens = batch["input_ids"].to(device)
             input_tokens = tokens[:, :-1]
             target_tokens = tokens[:, 1:]
 
             outputs = combined_model(audio_input, input_tokens)
             # Assuming a simple loss calculation for demonstration
-            loss = torch.nn.functional.cross_entropy(outputs.transpose(1, 2), target_tokens)
+            loss = torch.nn.functional.cross_entropy(outputs.transpose(1, 2), target_tokens, ignore_index=nllb_tokenizer.pad_token_id)
 
             optimizer.zero_grad()
             loss.backward()
