@@ -141,8 +141,6 @@ if __name__ == "__main__":
     # mongolian_dataset = load_dataset("covost2", "mn_en", split="train", data_dir="data/mn")
     # tamil_dataset = load_dataset("covost2", "ta_en", split="train", data_dir="data/ta")
 
-    # combined_dataset = interleave_datasets([latvian_dataset, mongolian_dataset, tamil_dataset]).select(range(1024))
-
     combined_dataset = load_dataset(
         "covost2", "pt_en", split="test", data_dir="data/pt"
     ).select(range(64))
@@ -188,6 +186,7 @@ if __name__ == "__main__":
         collate_fn=collator_fn,
     )
 
+
     # Training
     combined_model.adapter.train()
     combined_model.lm_head.train()
@@ -200,34 +199,37 @@ if __name__ == "__main__":
     bleu_metric = load_metric("sacrebleu")
     bertscore_metric = load_metric("bertscore")
 
-    for epoch in range(1):
-        loop = tqdm(loader, leave=True)
-        for batch in loop:
-            audio_input = batch["input_values"].to(device)
-            tokens = batch["input_ids"].to(device)
-            input_tokens = tokens[:, :-1]
-            target_tokens = tokens[:, 1:]
+    with open("logs/train_log2.txt", "w") as f:
+        for epoch in range(3):
+            loop = tqdm(loader, leave=True)
+            for batch in loop:
+                audio_input = batch["input_values"].to(device)
+                tokens = batch["input_ids"].to(device)
+                input_tokens = tokens[:, :-1]
+                target_tokens = tokens[:, 1:]
 
-            outputs = combined_model(audio_input, input_tokens)
-            # Assuming a simple loss calculation for demonstration
-            loss = torch.nn.functional.cross_entropy(
-                outputs.transpose(1, 2),
-                target_tokens,
-                ignore_index=nllb_tokenizer.pad_token_id,
-            )
+                outputs = combined_model(audio_input, input_tokens)
+                # Assuming a simple loss calculation for demonstration
+                loss = torch.nn.functional.cross_entropy(
+                    outputs.transpose(1, 2),
+                    target_tokens,
+                    ignore_index=nllb_tokenizer.pad_token_id,
+                )
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-            loop.set_description(f"Epoch {epoch + 1}")
-            loop.set_postfix(loss=loss.item())
+                loop.set_description(f"Epoch {epoch + 1}")
+                loop.set_postfix(loss=loss.item())
 
         combined_model.eval()
         bleu_result, bertscore_result = evaluate(
             combined_model, loader, nllb_tokenizer, 128, bleu_metric, bertscore_metric
         )
         print(f"BLEU: {bleu_result}, BERTScore: {bertscore_result}")
+        f.write(f"BLEU: {bleu_result}, BERTScore: {bertscore_result}\n")
+        f.flush()
         combined_model.train()
 
     print("Finished fine-tuning!")
