@@ -1,0 +1,6 @@
+BLEU Result for lv_en test split: 13.134197357534465, BERTScore: 0.6745318082339051
+
+BLEU Result for mn_en test split: 0.19298443110079772, BERTScore: 0.560920181634956
+
+BLEU Result for ta_en test split: 4.125609262180519, BERTScore: 0.5759622197190617
+

@@ -163,6 +163,9 @@ cython_debug/
 # dataset files
 data/
 
+#checkpoints
+checkpoints/
+
 
 # MACOS
 .DS_Store

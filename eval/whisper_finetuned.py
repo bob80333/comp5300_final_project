@@ -47,9 +47,9 @@ if device == "cuda":
 
 # model loaded
 pipe = pipeline(
-    "automatic-speech-recognition", model="openai/whisper-large-v2", device=device, model_kwargs=model_kwargs
+    "automatic-speech-recognition", model="checkpoints/whisper_large_v2_ft_epoch_2", device=device, model_kwargs=model_kwargs
 )
-with open("logs/whisper_large_v2_baseline.txt", "w") as f:
+with open("logs/whisper_large_v2_finetuned.txt", "w") as f:
     for lang in tqdm(covost2_langs.keys()):
         dataset = load_dataset("covost2", lang, data_dir="data/"+lang.split("_")[0])
         

@@ -12,6 +12,7 @@ from datasets import load_dataset, interleave_datasets, load_metric
 from tqdm.auto import tqdm
 import os
 import numpy as np
+from adamw_bfloat16 import LR, AdamW_BF16
 
 # Set environment variable for parallel tokenization, since it detects the dataloader multiprocessing and throws an error
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -72,39 +73,43 @@ class WhisperWithNLLBDecoder(nn.Module):
     def train(self):
         self.lm_head.train()
         self.adapter.train()
+        self.nllb_decoder.train()
 
 
 def evaluate(model, dataloader, tokenizer, max_length, bleu_metric, bertscore_metric):
-    references = []
-    predictions = []
-    for batch in tqdm(dataloader):
-        audio_input = batch["input_values"].to(device)
-        target_tokens = batch["input_ids"].to(device)
+    with torch.no_grad():
+        references = []
+        predictions = []
+        for batch in tqdm(dataloader):
+            audio_input = batch["input_values"].to(device)
+            audio_input = audio_input.to(torch.bfloat16)
+            target_tokens = batch["input_ids"].to(device)
+    
+            generated_tokens = model.generate(audio_input, max_length)
+            generated_text = tokenizer.batch_decode(
+                generated_tokens, skip_special_tokens=True
+            )
+            target_text = tokenizer.batch_decode(target_tokens, skip_special_tokens=True)
+        
+            # nested list for references as BLEU requires it
+            target_text = [[x] for x in target_text]
+        
+            references.extend(target_text)
+            predictions.extend(generated_text)
+        
+        print("Predictions:", generated_text)
+        print("GT:", target_text)
 
-        generated_tokens = model.generate(audio_input, max_length)
-        generated_text = tokenizer.batch_decode(
-            generated_tokens, skip_special_tokens=True
+        bleu_result = bleu_metric.compute(predictions=predictions, references=references)
+        bertscore_result = bertscore_metric.compute(
+            predictions=predictions,
+            references=references,
+            model_type="microsoft/deberta-xlarge-mnli",
+            batch_size=64,
         )
-        target_text = tokenizer.batch_decode(target_tokens, skip_special_tokens=True)
-        
-        # nested list for references as BLEU requires it
-        target_text = [[x] for x in target_text]
-        
-        references.extend(target_text)
-        predictions.extend(generated_text)
-        
-    print("Predictions:", generated_text)
-    print("GT:", target_text)
 
-    bleu_result = bleu_metric.compute(predictions=predictions, references=references)
-    bertscore_result = bertscore_metric.compute(
-        predictions=predictions,
-        references=references,
-        model_type="microsoft/deberta-xlarge-mnli",
-    )
-
-    bleu_score = bleu_result["score"]
-    bertscore_score = np.mean(bertscore_result["f1"])
+        bleu_score = bleu_result["score"]
+        bertscore_score = np.mean(bertscore_result["f1"])
 
     return bleu_score, bertscore_score
 
@@ -195,7 +200,7 @@ if __name__ == "__main__":
         processed_dataset,
         batch_size=16,
         shuffle=True,
-        num_workers=2,
+        num_workers=4,
         collate_fn=collator_fn,
     )
     
@@ -209,23 +214,26 @@ if __name__ == "__main__":
 
 
     # Training
-    combined_model.adapter.train()
-    combined_model.lm_head.train()
+    combined_model = combined_model.to(torch.bfloat16)
+    combined_model.train()
+    for param in combined_model.lm_head.parameters():
+        param.requires_grad = True
+    for param in combined_model.nllb_decoder.parameters():
+        param.requires_grad = True
 
-    params = list(combined_model.adapter.parameters()) + list(
-        combined_model.lm_head.parameters()
-    )
-    optimizer = torch.optim.Adam(params, lr=3e-4)
+    params = list(combined_model.adapter.parameters()) + list(combined_model.lm_head.parameters()) + list(combined_model.nllb_decoder.parameters())
+    optimizer = AdamW_BF16(params, lr_function=LR(lr=3e-4, preheat_steps=100))
 
     bleu_metric = load_metric("sacrebleu")
     bertscore_metric = load_metric("bertscore")
 
-    with open("logs/train_log2.txt", "w") as f:
+    with open("logs/train_log4.txt", "w") as f:
         for epoch in range(3):
             longest = 0
             loop = tqdm(loader, leave=True)
             for batch in loop:
                 audio_input = batch["input_values"].to(device)
+                audio_input = audio_input.to(torch.bfloat16)
                 tokens = batch["input_ids"].to(device)
                 input_tokens = tokens[:, :-1]
                 target_tokens = tokens[:, 1:]
@@ -240,9 +248,8 @@ if __name__ == "__main__":
                     ignore_index=nllb_tokenizer.pad_token_id,
                 )
 
-                optimizer.zero_grad()
                 loss.backward()
-                optimizer.step()
+                optimizer.step(zero_grad=True)
 
                 loop.set_description(f"Epoch {epoch + 1}")
                 loop.set_postfix(loss=loss.item())
