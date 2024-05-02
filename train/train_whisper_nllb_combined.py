@@ -250,7 +250,7 @@ if __name__ == "__main__":
             combined_model.eval()
             print(longest)
             bleu_result, bertscore_result = evaluate(
-                combined_model, val_loader, nllb_tokenizer, 50, bleu_metric, bertscore_metric
+                combined_model, val_loader, nllb_tokenizer, 40, bleu_metric, bertscore_metric
             )
             print(f"BLEU: {bleu_result}, BERTScore: {bertscore_result}")
             f.write(f"BLEU: {bleu_result}, BERTScore: {bertscore_result}\n")
