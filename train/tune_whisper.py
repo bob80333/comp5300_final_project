@@ -70,7 +70,7 @@ if __name__ == "__main__":
     mongolian_dataset = load_dataset("covost2", "mn_en", split="train", data_dir="data/mn")
     tamil_dataset = load_dataset("covost2", "ta_en", split="train", data_dir="data/ta")
     
-    combined_dataset = interleave_datasets([latvian_dataset, mongolian_dataset, tamil_dataset]).select(range(32))
+    combined_dataset = interleave_datasets([latvian_dataset, mongolian_dataset, tamil_dataset])#.select(range(32))
 
     #combined_dataset = load_dataset(
     #    "covost2", "pt_en", split="test", data_dir="data/pt"
@@ -81,7 +81,7 @@ if __name__ == "__main__":
     val_mongolian_dataset = load_dataset("covost2", "mn_en", split="validation", data_dir="data/mn")
     val_tamil_dataset = load_dataset("covost2", "ta_en", split="validation", data_dir="data/ta")
 
-    combined_val = interleave_datasets([val_latvian_dataset, val_mongolian_dataset, val_tamil_dataset]).select(range(16))
+    combined_val = interleave_datasets([val_latvian_dataset, val_mongolian_dataset, val_tamil_dataset])#.select(range(16))
 
     #combined_val = load_dataset(
     #    "covost2", "pt_en", split="validation", data_dir="data/pt"
