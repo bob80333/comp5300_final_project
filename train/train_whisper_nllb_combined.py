@@ -86,9 +86,15 @@ def evaluate(model, dataloader, tokenizer, max_length, bleu_metric, bertscore_me
             generated_tokens, skip_special_tokens=True
         )
         target_text = tokenizer.batch_decode(target_tokens, skip_special_tokens=True)
-
+        
+        # nested list for references as BLEU requires it
+        target_text = [[x] for x in target_text]
+        
         references.extend(target_text)
         predictions.extend(generated_text)
+        
+    print("Predictions:", generated_text)
+    print("GT:", target_text)
 
     bleu_result = bleu_metric.compute(predictions=predictions, references=references)
     bertscore_result = bertscore_metric.compute(
@@ -137,24 +143,26 @@ if __name__ == "__main__":
     combined_model.to(device)
 
     # Load datasets
-    # latvian_dataset = load_dataset("covost2", "lv_en", split="train", data_dir="data/lv")
-    # mongolian_dataset = load_dataset("covost2", "mn_en", split="train", data_dir="data/mn")
-    # tamil_dataset = load_dataset("covost2", "ta_en", split="train", data_dir="data/ta")
+    latvian_dataset = load_dataset("covost2", "lv_en", split="train", data_dir="data/lv")
+    mongolian_dataset = load_dataset("covost2", "mn_en", split="train", data_dir="data/mn")
+    tamil_dataset = load_dataset("covost2", "ta_en", split="train", data_dir="data/ta")
+    
+    combined_dataset = interleave_datasets([latvian_dataset, mongolian_dataset, tamil_dataset])#.select(range(256))
 
-    combined_dataset = load_dataset(
-        "covost2", "pt_en", split="test", data_dir="data/pt"
-    ).select(range(64))
+    #combined_dataset = load_dataset(
+    #    "covost2", "pt_en", split="test", data_dir="data/pt"
+    #).select(range(64))
     print(combined_dataset)
 
-    # val_latvian_dataset = load_dataset("covost2", "lv_en", split="validation", data_dir="data/lv")
-    # val_mongolian_dataset = load_dataset("covost2", "mn_en", split="validation", data_dir="data/mn")
-    # val_tamil_dataset = load_dataset("covost2", "ta_en", split="validation", data_dir="data/ta")
+    val_latvian_dataset = load_dataset("covost2", "lv_en", split="validation", data_dir="data/lv")
+    val_mongolian_dataset = load_dataset("covost2", "mn_en", split="validation", data_dir="data/mn")
+    val_tamil_dataset = load_dataset("covost2", "ta_en", split="validation", data_dir="data/ta")
 
-    # combined_val = interleave_datasets([val_latvian_dataset, val_mongolian_dataset, val_tamil_dataset]).select(range(256))
+    combined_val = interleave_datasets([val_latvian_dataset, val_mongolian_dataset, val_tamil_dataset])#.select(range(64))
 
-    combined_val = load_dataset(
-        "covost2", "pt_en", split="validation", data_dir="data/pt"
-    ).select(range(32))
+    #combined_val = load_dataset(
+    #    "covost2", "pt_en", split="validation", data_dir="data/pt"
+    #).select(range(32))
     print(combined_val)
 
     # Preprocess and create dataloader
@@ -175,15 +183,28 @@ if __name__ == "__main__":
         preprocess, remove_columns=combined_dataset.column_names
     )
     processed_dataset.set_format(type="torch", columns=["input_values", "input_ids"])
+    
+    processed_val = combined_val.map(
+        preprocess, remove_columns=combined_val.column_names
+    )
+    processed_val.set_format(type="torch", columns=["input_values", "input_ids"])
 
     collator_fn = DataCollatorWithPadding(nllb_tokenizer)
 
     loader = DataLoader(
         processed_dataset,
-        batch_size=8,
+        batch_size=16,
         shuffle=True,
         num_workers=2,
         collate_fn=collator_fn,
+    )
+    
+    val_loader = DataLoader(
+        processed_val,
+        batch_size=8,
+        shuffle=False,
+        num_workers=2,
+        collate_fn=collator_fn
     )
 
 
@@ -201,12 +222,15 @@ if __name__ == "__main__":
 
     with open("logs/train_log2.txt", "w") as f:
         for epoch in range(3):
+            longest = 0
             loop = tqdm(loader, leave=True)
             for batch in loop:
                 audio_input = batch["input_values"].to(device)
                 tokens = batch["input_ids"].to(device)
                 input_tokens = tokens[:, :-1]
                 target_tokens = tokens[:, 1:]
+                if tokens.shape[1] > longest:
+                    longest = tokens.shape[1]
 
                 outputs = combined_model(audio_input, input_tokens)
                 # Assuming a simple loss calculation for demonstration
@@ -223,13 +247,14 @@ if __name__ == "__main__":
                 loop.set_description(f"Epoch {epoch + 1}")
                 loop.set_postfix(loss=loss.item())
 
-        combined_model.eval()
-        bleu_result, bertscore_result = evaluate(
-            combined_model, loader, nllb_tokenizer, 128, bleu_metric, bertscore_metric
-        )
-        print(f"BLEU: {bleu_result}, BERTScore: {bertscore_result}")
-        f.write(f"BLEU: {bleu_result}, BERTScore: {bertscore_result}\n")
-        f.flush()
-        combined_model.train()
+            combined_model.eval()
+            print(longest)
+            bleu_result, bertscore_result = evaluate(
+                combined_model, val_loader, nllb_tokenizer, 50, bleu_metric, bertscore_metric
+            )
+            print(f"BLEU: {bleu_result}, BERTScore: {bertscore_result}")
+            f.write(f"BLEU: {bleu_result}, BERTScore: {bertscore_result}\n")
+            f.flush()
+            combined_model.train()
 
     print("Finished fine-tuning!")
