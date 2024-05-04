@@ -1,0 +1,52 @@
+combined_v2: start taking learnings from full finetune of whisper
+
+_1: lower lr from 3e-4 to 3e-5. for now only tuning output layer and adapter, but if/when finetuning more of model, lower lr will be needed
+so seeing if can get similar perf after 1 epoch with lower lr
+
+_2: try to finetune decoder layers without oom
+_3: it works
+_4: 600M -> 3.3B, see about ooms
+
+13726MiB before training starts, then OOMs
+what if move unused parts off gpu?
+13724MiB.. how???
+
+need to empty cache to see actual memory use:
+before moving:
+11684MiB
+after moving:
+6342MiB
+
+before:
+11684 MiB
+afteR:
+9834 MiB (no longer moving NLLB since need lm_head from encoder
+
+OOMs
+
+moving to cpu code before Combined model construction
+this way when combined_model.to(device) is run
+any parts that are moved to CPU will go back to GPU
+
+before:
+11678MiB
+after:
+6336MiB
+
+OOMs
+
+reduce batch size? originally 16
+batch 8 too big
+batch 4 too big
+batch 1? too big
+3.3B too big.
+1.3B?
+
+after moving 1.3B:
+3058MiB
+
+batch 1 training: 11902MiB
+
+_4: 1.3 B NLLB, batch 16, tune adapter, decoder, output
+
+_5: 1.3B NLLB, batch 2, tune everything, grad accum 8

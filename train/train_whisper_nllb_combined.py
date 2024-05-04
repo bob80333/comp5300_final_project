@@ -14,6 +14,8 @@ import os
 import numpy as np
 from adamw_bfloat16 import LR, AdamW_BF16
 
+import time
+
 # Set environment variable for parallel tokenization, since it detects the dataloader multiprocessing and throws an error
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
@@ -28,16 +30,16 @@ class LinearAdapter(nn.Module):
 
 
 class WhisperWithNLLBDecoder(nn.Module):
-    def __init__(self, whisper, nllb_decoder, nllb_lm_head, adapter):
+    def __init__(self, whisper_encoder, nllb_decoder, nllb_lm_head, adapter):
         super().__init__()
-        self.whisper = whisper
+        self.whisper_encoder = whisper_encoder
         self.adapter = adapter
         self.nllb_decoder = nllb_decoder
         self.lm_head = nllb_lm_head
 
     def forward(self, audio_input, target_nllb_tokens):
         # encode audio input using Whisper model
-        encoder_outputs = self.whisper.model.encoder(audio_input)
+        encoder_outputs = self.whisper_encoder(audio_input)
         hidden_states = encoder_outputs.last_hidden_state
         adapted = self.adapter(hidden_states)
         hidden = self.nllb_decoder(
@@ -47,7 +49,7 @@ class WhisperWithNLLBDecoder(nn.Module):
         return logits
 
     def generate(self, audio_input, max_length):
-        encoder_outputs = self.whisper.model.encoder(audio_input)
+        encoder_outputs = self.whisper_encoder(audio_input)
         hidden_states = encoder_outputs.last_hidden_state
         adapted = self.adapter(hidden_states)
         tokens = (
@@ -65,7 +67,7 @@ class WhisperWithNLLBDecoder(nn.Module):
         return tokens
 
     def eval(self):
-        self.whisper.eval()
+        self.whisper_encoder.eval()
         self.nllb_decoder.eval()
         self.lm_head.eval()
         self.adapter.eval()
@@ -115,18 +117,22 @@ def evaluate(model, dataloader, tokenizer, max_length, bleu_metric, bertscore_me
 
 
 if __name__ == "__main__":
-    whisper_name = "openai/whisper-tiny"
-    nllb_name = "facebook/nllb-200-distilled-600M"
+    whisper_name = "openai/whisper-large-v2"
+    nllb_name = "facebook/nllb-200-1.3B"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load Whisper model
-    whisper_model = WhisperForConditionalGeneration.from_pretrained(whisper_name)
+    whisper_model = WhisperForConditionalGeneration.from_pretrained(whisper_name, device_map=device, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2")
     whisper_processor = WhisperProcessor.from_pretrained(whisper_name)
 
+    whisper_model.gradient_checkpointing_enable()
+
     # Load Facebook's NLLB-200 decoder
-    nllb_model = AutoModelForSeq2SeqLM.from_pretrained(nllb_name)
-    nllb_tokenizer = AutoTokenizer.from_pretrained(nllb_name)
+    nllb_model = AutoModelForSeq2SeqLM.from_pretrained(nllb_name, device_map=device, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2")
+    nllb_tokenizer = AutoTokenizer.from_pretrained(nllb_name, tgt_lang="eng_Latn")
+
+    nllb_model.gradient_checkpointing_enable()
 
     # Freeze parameters of both pre-trained models
     for param in whisper_model.parameters():
@@ -141,11 +147,24 @@ if __name__ == "__main__":
 
     adapter = LinearAdapter(input_dim, output_dim)
 
+    
+    torch.cuda.empty_cache()
+    print("before moving")
+    time.sleep(10)
+
+    # save some GPU memory by moving off GPU
+    whisper_model.model.decoder.to("cpu")
+    nllb_model.model.encoder.to("cpu")
+    torch.cuda.empty_cache()
+    print("after moving")
+    time.sleep(10)
+
     # Instantiate the combined model
     combined_model = WhisperWithNLLBDecoder(
-        whisper_model, nllb_model.model.decoder, nllb_model.lm_head, adapter
+        whisper_model.model.encoder, nllb_model.model.decoder, nllb_model.lm_head, adapter
     )
     combined_model.to(device)
+
 
     # Load datasets
     latvian_dataset = load_dataset("covost2", "lv_en", split="train", data_dir="data/lv")
@@ -170,6 +189,16 @@ if __name__ == "__main__":
     #).select(range(32))
     print(combined_val)
 
+    def path_to_lang(path):
+        if "ta/clips" in path:
+            return "tam_Taml"
+        elif "mn/clips" in path:
+          return "khk_Cyrl"
+        elif "lv/clips":
+          return "lvs_Latn"
+        else:
+          raise RuntimeError(f"Unsupported path {path} does not match Tamil, Mongolian, or Latvian path expectation")
+
     # Preprocess and create dataloader
     def preprocess(example):
         # Assume dataset structure and perform necessary handling like text conversion
@@ -180,7 +209,7 @@ if __name__ == "__main__":
         ).input_features[0]
 
         target_ids = nllb_tokenizer(
-            example["translation"], return_tensors="pt"
+            text_target=example["translation"], return_tensors="pt"
         ).input_ids[0]
         return {"input_values": input_values, "input_ids": target_ids}
 
@@ -198,7 +227,7 @@ if __name__ == "__main__":
 
     loader = DataLoader(
         processed_dataset,
-        batch_size=16,
+        batch_size=2,
         shuffle=True,
         num_workers=4,
         collate_fn=collator_fn,
@@ -206,7 +235,7 @@ if __name__ == "__main__":
     
     val_loader = DataLoader(
         processed_val,
-        batch_size=8,
+        batch_size=4,
         shuffle=False,
         num_workers=2,
         collate_fn=collator_fn
@@ -216,22 +245,21 @@ if __name__ == "__main__":
     # Training
     combined_model = combined_model.to(torch.bfloat16)
     combined_model.train()
-    for param in combined_model.lm_head.parameters():
-        param.requires_grad = True
-    for param in combined_model.nllb_decoder.parameters():
+    for param in combined_model.parameters():
         param.requires_grad = True
 
-    params = list(combined_model.adapter.parameters()) + list(combined_model.lm_head.parameters()) + list(combined_model.nllb_decoder.parameters())
-    optimizer = AdamW_BF16(params, lr_function=LR(lr=3e-4, preheat_steps=100))
+    #params = list(combined_model.adapter.parameters()) + list(combined_model.lm_head.parameters()) + list(combined_model.nllb_decoder.parameters())
+    optimizer = AdamW_BF16(combined_model.parameters(), lr_function=LR(lr=1e-4, preheat_steps=100))
 
     bleu_metric = load_metric("sacrebleu")
     bertscore_metric = load_metric("bertscore")
+    grad_accum = 8
 
-    with open("logs/train_log4.txt", "w") as f:
+    with open("logs/train_log_combined_v2_5.txt", "w") as f:
         for epoch in range(3):
             longest = 0
             loop = tqdm(loader, leave=True)
-            for batch in loop:
+            for i, batch in enumerate(loop):
                 audio_input = batch["input_values"].to(device)
                 audio_input = audio_input.to(torch.bfloat16)
                 tokens = batch["input_ids"].to(device)
@@ -247,12 +275,13 @@ if __name__ == "__main__":
                     target_tokens,
                     ignore_index=nllb_tokenizer.pad_token_id,
                 )
-
+                
                 loss.backward()
-                optimizer.step(zero_grad=True)
+                if (i+1) % grad_accum == 0:
+                    optimizer.step(zero_grad=True)
 
-                loop.set_description(f"Epoch {epoch + 1}")
-                loop.set_postfix(loss=loss.item())
+                    loop.set_description(f"Epoch {epoch + 1}")
+                    loop.set_postfix(loss=loss.item())
 
             combined_model.eval()
             print(longest)
@@ -262,6 +291,7 @@ if __name__ == "__main__":
             print(f"BLEU: {bleu_result}, BERTScore: {bertscore_result}")
             f.write(f"BLEU: {bleu_result}, BERTScore: {bertscore_result}\n")
             f.flush()
+            torch.save(combined_model, f"checkpoints/combined/combined_epoch_{epoch}.pt")
             combined_model.train()
 
     print("Finished fine-tuning!")
